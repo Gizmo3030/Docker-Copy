@@ -1,0 +1,117 @@
+:root {
+  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  color: #0f172a;
+  background-color: #f8fafc;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: radial-gradient(circle at top, #e0f2fe 0%, #f8fafc 45%, #f1f5f9 100%);
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button {
+  border-radius: 10px;
+  border: 1px solid transparent;
+  padding: 0.6em 1.2em;
+  font-size: 0.95rem;
+  font-weight: 600;
+  background-color: #ffffff;
+  color: #0f172a;
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.08);
+  cursor: pointer;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+button:hover:enabled {
+  transform: translateY(-1px);
+  box-shadow: 0 14px 32px rgba(15, 23, 42, 0.12);
+  border-color: #38bdf8;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+  box-shadow: none;
+}
+
+button.primary {
+  background: linear-gradient(120deg, #2563eb, #38bdf8);
+  color: #ffffff;
+  border: none;
+}
+
+input {
+  width: 100%;
+  padding: 0.55rem 0.75rem;
+  border-radius: 10px;
+  border: 1px solid #e2e8f0;
+  background: #ffffff;
+  box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.05);
+}
+
+input:focus {
+  outline: 2px solid #38bdf8;
+  border-color: transparent;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color: #e2e8f0;
+    background-color: #0b1220;
+  }
+
+  body {
+    background: radial-gradient(circle at top, #0f172a 0%, #0b1220 45%, #0b1120 100%);
+  }
+
+  button {
+    background-color: #0f172a;
+    color: #e2e8f0;
+    border-color: #1f2937;
+    box-shadow: 0 12px 30px rgba(15, 23, 42, 0.45);
+  }
+
+  button:hover:enabled {
+    border-color: #38bdf8;
+    box-shadow: 0 14px 32px rgba(15, 23, 42, 0.6);
+  }
+
+  button:disabled {
+    box-shadow: none;
+  }
+
+  button.primary {
+    background: linear-gradient(120deg, #1d4ed8, #0ea5e9);
+    color: #ffffff;
+  }
+
+  input {
+    background: #0f172a;
+    border-color: #1f2937;
+    color: #e2e8f0;
+    box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.6);
+  }
+
+  input:focus {
+    outline: 2px solid #38bdf8;
+    border-color: transparent;
+  }
+}
