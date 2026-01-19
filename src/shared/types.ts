@@ -12,6 +12,8 @@ export interface DockerContainerInfo {
   name: string
   image: string
   status: string
+  volumes: string[]
+  networks: string[]
 }
 
 export interface DockerVolumeInfo {

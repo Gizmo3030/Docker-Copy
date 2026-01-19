@@ -4,12 +4,16 @@
   "version": "0.0.0",
   "type": "module",
   "main": "dist-electron/main/main.js",
+  "description": "Desktop app for copying files from Docker containers.",
+  "author": {
+    "name": "Cody Robillard"
+  },
   "scripts": {
     "dev": "concurrently -k \"vite\" \"tsc -p tsconfig.electron.json --watch\" \"wait-on http://localhost:5173 dist-electron/main/main.js && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .\"",
     "build": "tsc -p tsconfig.electron.json && tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "package": "electron-builder"
+    "package": "cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder"
   },
   "dependencies": {
     "react": "^19.2.0",
@@ -37,6 +41,10 @@
   "build": {
     "appId": "com.example.docker-copy",
     "productName": "Docker Copy",
+    "icon": "docs/image.png",
+    "win": {
+      "sign": false
+    },
     "files": [
       "dist/**",
       "dist-electron/**",

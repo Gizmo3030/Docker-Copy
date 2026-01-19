@@ -27,14 +27,50 @@ function parseJsonLines<T>(output: string): T[] {
 
 export async function listContainers(host: HostConfig): Promise<DockerContainerInfo[]> {
   const output = await runDockerCommand(host, ['ps', '-a', '--format', '{{json .}}'])
-  return parseJsonLines<{ ID: string; Names: string; Image: string; Status: string }>(output).map(
-    (item) => ({
-      id: item.ID,
-      name: item.Names,
-      image: item.Image,
-      status: item.Status,
-    }),
+  const containers = parseJsonLines<{ ID: string; Names: string; Image: string; Status: string }>(
+    output,
+  ).map((item) => ({
+    id: item.ID,
+    name: item.Names,
+    image: item.Image,
+    status: item.Status,
+    volumes: [],
+    networks: [],
+  }))
+
+  if (!containers.length) {
+    return containers
+  }
+
+  const inspectOutput = await runDockerCommand(host, [
+    'inspect',
+    ...containers.map((container) => container.id),
+  ])
+  const inspectData = JSON.parse(inspectOutput) as Array<{
+    Id: string
+    Mounts?: Array<{ Type?: string; Name?: string; Source?: string; Destination?: string }>
+    NetworkSettings?: { Networks?: Record<string, unknown> }
+  }>
+
+  const inspectById = new Map(
+    inspectData.map((item) => [item.Id, item]),
   )
+
+  return containers.map((container) => {
+    const details = inspectById.get(container.id)
+    const volumes = (details?.Mounts ?? [])
+      .map((mount) => mount.Name || mount.Source || mount.Destination)
+      .filter(Boolean) as string[]
+    const networks = details?.NetworkSettings?.Networks
+      ? Object.keys(details.NetworkSettings.Networks)
+      : []
+
+    return {
+      ...container,
+      volumes,
+      networks,
+    }
+  })
 }
 
 export async function listVolumes(host: HostConfig): Promise<DockerVolumeInfo[]> {

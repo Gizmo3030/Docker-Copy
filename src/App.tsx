@@ -78,6 +78,25 @@ function App() {
     [selection],
   )
 
+  const inventoryRelations = useMemo(() => {
+    const attachedVolumeNames = new Set<string>()
+    const attachedNetworkNames = new Set<string>()
+
+    inventory.containers.forEach((container) => {
+      container.volumes.forEach((volume) => attachedVolumeNames.add(volume))
+      container.networks.forEach((network) => attachedNetworkNames.add(network))
+    })
+
+    const orphanVolumes = inventory.volumes.filter(
+      (volume) => !attachedVolumeNames.has(volume.name),
+    )
+    const orphanNetworks = inventory.networks.filter(
+      (network) => !attachedNetworkNames.has(network.name),
+    )
+
+    return { orphanVolumes, orphanNetworks }
+  }, [inventory])
+
   const canTestSource = useMemo(
     () => useLocalSource || Boolean(sourceHost.host && sourceHost.user),
     [sourceHost.host, sourceHost.user, useLocalSource],
@@ -389,77 +408,153 @@ function App() {
           </button>
         </div>
 
-        <div className="inventory-grid">
-          <div>
-            <h3>Containers</h3>
-            {inventory.containers.map((container) => (
-              <label key={container.id} className="list-item">
-                <input
-                  type="checkbox"
-                  checked={selection.containers.includes(container.name)}
-                  onChange={(event) => {
-                    setSelection((prev) => ({
-                      ...prev,
-                      containers: event.target.checked
-                        ? [...prev.containers, container.name]
-                        : prev.containers.filter((item) => item !== container.name),
-                    }))
-                  }}
-                />
-                <span>
-                  <strong>{container.name}</strong>
-                  <span className="meta">{container.image}</span>
-                  <span className="meta">{container.status}</span>
-                </span>
-              </label>
-            ))}
+        <div className="inventory-table" role="table" aria-label="Container inventory">
+          <div className="inventory-row inventory-header" role="row">
+            <span className="inventory-cell" role="columnheader">
+              Containers
+            </span>
+            <span className="inventory-cell" role="columnheader">
+              Volumes
+            </span>
+            <span className="inventory-cell" role="columnheader">
+              Networks
+            </span>
           </div>
-          <div>
-            <h3>Volumes</h3>
-            {inventory.volumes.map((volume) => (
-              <label key={volume.name} className="list-item">
-                <input
-                  type="checkbox"
-                  checked={selection.volumes.includes(volume.name)}
-                  onChange={(event) => {
-                    setSelection((prev) => ({
-                      ...prev,
-                      volumes: event.target.checked
-                        ? [...prev.volumes, volume.name]
-                        : prev.volumes.filter((item) => item !== volume.name),
-                    }))
-                  }}
-                />
-                <span>
-                  <strong>{volume.name}</strong>
-                  <span className="meta">Driver: {volume.driver}</span>
-                </span>
-              </label>
-            ))}
-          </div>
-          <div>
-            <h3>Networks</h3>
-            {inventory.networks.map((network) => (
-              <label key={network.id} className="list-item">
-                <input
-                  type="checkbox"
-                  checked={selection.networks.includes(network.name)}
-                  onChange={(event) => {
-                    setSelection((prev) => ({
-                      ...prev,
-                      networks: event.target.checked
-                        ? [...prev.networks, network.name]
-                        : prev.networks.filter((item) => item !== network.name),
-                    }))
-                  }}
-                />
-                <span>
-                  <strong>{network.name}</strong>
-                  <span className="meta">Driver: {network.driver}</span>
-                </span>
-              </label>
-            ))}
-          </div>
+          {inventory.containers.map((container) => (
+            <div key={container.id} className="inventory-row" role="row">
+              <div className="inventory-cell" role="cell">
+                <label className="list-item">
+                  <input
+                    type="checkbox"
+                    checked={selection.containers.includes(container.name)}
+                    onChange={(event) => {
+                      setSelection((prev) => ({
+                        ...prev,
+                        containers: event.target.checked
+                          ? [...prev.containers, container.name]
+                          : prev.containers.filter((item) => item !== container.name),
+                      }))
+                    }}
+                  />
+                  <span>
+                    <strong>{container.name}</strong>
+                    <span className="meta">{container.image}</span>
+                    <span className="meta">{container.status}</span>
+                  </span>
+                </label>
+              </div>
+              <div className="inventory-cell" role="cell">
+                {container.volumes.length ? (
+                  <div className="tag-list">
+                    {container.volumes.map((volume) => (
+                      <label key={volume} className="tag selectable">
+                        <input
+                          type="checkbox"
+                          checked={selection.volumes.includes(volume)}
+                          onChange={(event) => {
+                            setSelection((prev) => ({
+                              ...prev,
+                              volumes: event.target.checked
+                                ? [...prev.volumes, volume]
+                                : prev.volumes.filter((item) => item !== volume),
+                            }))
+                          }}
+                        />
+                        {volume}
+                      </label>
+                    ))}
+                  </div>
+                ) : (
+                  <span className="muted">No volumes</span>
+                )}
+              </div>
+              <div className="inventory-cell" role="cell">
+                {container.networks.length ? (
+                  <div className="tag-list">
+                    {container.networks.map((network) => (
+                      <label key={network} className="tag selectable">
+                        <input
+                          type="checkbox"
+                          checked={selection.networks.includes(network)}
+                          onChange={(event) => {
+                            setSelection((prev) => ({
+                              ...prev,
+                              networks: event.target.checked
+                                ? [...prev.networks, network]
+                                : prev.networks.filter((item) => item !== network),
+                            }))
+                          }}
+                        />
+                        {network}
+                      </label>
+                    ))}
+                  </div>
+                ) : (
+                  <span className="muted">No networks</span>
+                )}
+              </div>
+            </div>
+          ))}
+
+          {(inventoryRelations.orphanVolumes.length > 0 ||
+            inventoryRelations.orphanNetworks.length > 0) && (
+            <div className="inventory-row orphan-row" role="row">
+              <div className="inventory-cell" role="cell">
+                <strong>Unattached</strong>
+                <span className="meta">Items not linked to a container</span>
+              </div>
+              <div className="inventory-cell" role="cell">
+                {inventoryRelations.orphanVolumes.length ? (
+                  <div className="tag-list">
+                    {inventoryRelations.orphanVolumes.map((volume) => (
+                      <label key={volume.name} className="tag selectable">
+                        <input
+                          type="checkbox"
+                          checked={selection.volumes.includes(volume.name)}
+                          onChange={(event) => {
+                            setSelection((prev) => ({
+                              ...prev,
+                              volumes: event.target.checked
+                                ? [...prev.volumes, volume.name]
+                                : prev.volumes.filter((item) => item !== volume.name),
+                            }))
+                          }}
+                        />
+                        {volume.name}
+                      </label>
+                    ))}
+                  </div>
+                ) : (
+                  <span className="muted">No unattached volumes</span>
+                )}
+              </div>
+              <div className="inventory-cell" role="cell">
+                {inventoryRelations.orphanNetworks.length ? (
+                  <div className="tag-list">
+                    {inventoryRelations.orphanNetworks.map((network) => (
+                      <label key={network.id} className="tag selectable">
+                        <input
+                          type="checkbox"
+                          checked={selection.networks.includes(network.name)}
+                          onChange={(event) => {
+                            setSelection((prev) => ({
+                              ...prev,
+                              networks: event.target.checked
+                                ? [...prev.networks, network.name]
+                                : prev.networks.filter((item) => item !== network.name),
+                            }))
+                          }}
+                        />
+                        {network.name}
+                      </label>
+                    ))}
+                  </div>
+                ) : (
+                  <span className="muted">No unattached networks</span>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       </section>
 
