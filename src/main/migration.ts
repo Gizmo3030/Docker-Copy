@@ -177,8 +177,27 @@ async function rsyncFileToTarget(filePath: string, targetPath: string, target: H
   const sshIndex = sshArgs.findIndex((arg) => arg.includes('@'))
   const sshPrefix = ['ssh', ...sshArgs.slice(0, sshIndex)]
   const remoteHost = sshArgs[sshIndex]
-  const args = ['-az', '-e', `${sshPrefix.join(' ')}`, filePath, `${remoteHost}:${targetPath}`]
-  await runLocalCommand('rsync', args)
+  const rsyncArgs = ['-az', '-e', `${sshPrefix.join(' ')}`, filePath, `${remoteHost}:${targetPath}`]
+
+  try {
+    await runLocalCommand('rsync', rsyncArgs)
+    return
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException
+    if (err.code && err.code !== 'ENOENT') {
+      throw error
+    }
+  }
+
+  const scpArgs: string[] = []
+  if (target.port) {
+    scpArgs.push('-P', String(target.port))
+  }
+  if (target.identityFile) {
+    scpArgs.push('-i', target.identityFile)
+  }
+  scpArgs.push(filePath, `${target.user}@${target.host}:${targetPath}`)
+  await runLocalCommand('scp', scpArgs)
 }
 
 function buildContainerRunArgs(name: string, inspect: ContainerInspect, imageTag: string): string[] {
