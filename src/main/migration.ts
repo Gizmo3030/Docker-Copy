@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -59,26 +60,96 @@ function buildSshCommandString(host: HostConfig, remoteCommand: string): string 
   return parts.map(shellEscape).join(' ')
 }
 
-function buildDockerTarCommand(volume: string): string {
-  const volumeArg = shellEscape(`${volume}:/from`)
-  return `docker run --rm -v ${volumeArg} alpine sh -c "cd /from && tar -cpf - ."`
+function buildDockerTarArgs(volume: string): string[] {
+  return ['run', '--rm', '-v', `${volume}:/from`, 'alpine', 'sh', '-c', 'cd /from && tar -cpf - .']
+}
+
+function buildDockerUntarArgs(volume: string): string[] {
+  return [
+    'run',
+    '--rm',
+    '-i',
+    '-v',
+    `${volume}:/to`,
+    'alpine',
+    'sh',
+    '-c',
+    'cd /to && rm -rf ./* ./.??* && tar -xpf -',
+  ]
 }
 
 function buildDockerUntarCommand(volume: string): string {
-  const volumeArg = shellEscape(`${volume}:/to`)
-  return `docker run --rm -i -v ${volumeArg} alpine sh -c "cd /to && rm -rf ./* ./.??* && tar -xpf -"`
+  return buildDockerCommand(buildDockerUntarArgs(volume))
+}
+
+async function runPipedCommands(
+  sourceCommand: string,
+  sourceArgs: string[],
+  targetCommand: string,
+  targetArgs: string[],
+): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const source = spawn(sourceCommand, sourceArgs, { stdio: ['ignore', 'pipe', 'pipe'] })
+    const target = spawn(targetCommand, targetArgs, { stdio: ['pipe', 'pipe', 'pipe'] })
+
+    source.stdout.pipe(target.stdin)
+
+    let sourceError = ''
+    let targetError = ''
+
+    source.stderr.on('data', (chunk) => {
+      sourceError += chunk.toString()
+    })
+    target.stderr.on('data', (chunk) => {
+      targetError += chunk.toString()
+    })
+
+    source.on('error', (error) => reject(error))
+    target.on('error', (error) => reject(error))
+
+    let sourceExit: number | null = null
+    let targetExit: number | null = null
+
+    const checkComplete = () => {
+      if (sourceExit === null || targetExit === null) {
+        return
+      }
+      if (sourceExit !== 0 || targetExit !== 0) {
+        const details = [sourceError.trim(), targetError.trim()].filter(Boolean).join('\n')
+        reject(
+          new Error(
+            `Helper sync failed (source=${sourceExit}, target=${targetExit}).${details ? `\n${details}` : ''}`,
+          ),
+        )
+        return
+      }
+      resolve()
+    }
+
+    source.on('close', (code) => {
+      sourceExit = code
+      checkComplete()
+    })
+    target.on('close', (code) => {
+      targetExit = code
+      checkComplete()
+    })
+  })
 }
 
 async function syncVolumeWithHelper(source: HostConfig, target: HostConfig, name: string): Promise<void> {
   if (isRemoteHost(source)) {
     throw new Error('Helper-container sync requires a local source host.')
   }
-  const sourceCmd = buildDockerTarCommand(name)
-  const targetCmd = buildDockerUntarCommand(name)
-  const pipeline = isRemoteHost(target)
-    ? `${sourceCmd} | ${buildSshCommandString(target, targetCmd)}`
-    : `${sourceCmd} | ${targetCmd}`
-  await runLocalCommand('sh', ['-c', pipeline])
+  const sourceArgs = buildDockerTarArgs(name)
+  if (isRemoteHost(target)) {
+    const targetCmd = buildDockerUntarCommand(name)
+    const sshArgs = buildSshArgs(target, targetCmd)
+    await runPipedCommands('docker', sourceArgs, 'ssh', sshArgs)
+    return
+  }
+  const targetArgs = buildDockerUntarArgs(name)
+  await runPipedCommands('docker', sourceArgs, 'docker', targetArgs)
 }
 
 function sanitizeImageTag(value: string): string {
