@@ -200,8 +200,24 @@ async function rsyncFileToTarget(filePath: string, targetPath: string, target: H
   await runLocalCommand('scp', scpArgs)
 }
 
-function buildContainerRunArgs(name: string, inspect: ContainerInspect, imageTag: string): string[] {
+function isWindowsPath(value: string): boolean {
+  return /^[a-zA-Z]:\\/.test(value) || value.includes('\\')
+}
+
+function normalizeBindMount(bind: string): { bind?: string; reason?: string } {
+  if (isWindowsPath(bind)) {
+    return { reason: 'Windows host path detected' }
+  }
+  return { bind }
+}
+
+function buildContainerRunArgs(
+  name: string,
+  inspect: ContainerInspect,
+  imageTag: string,
+): { args: string[]; skippedBinds: string[] } {
   const args: string[] = []
+  const skippedBinds: string[] = []
   const isRunning = Boolean(inspect.State?.Running)
   args.push(isRunning ? 'run' : 'create')
   if (isRunning) {
@@ -213,7 +229,14 @@ function buildContainerRunArgs(name: string, inspect: ContainerInspect, imageTag
   env.forEach((entry) => args.push('-e', entry))
 
   const binds = inspect.HostConfig?.Binds ?? []
-  binds.forEach((bind) => args.push('-v', bind))
+  binds.forEach((bind) => {
+    const { bind: normalized } = normalizeBindMount(bind)
+    if (normalized) {
+      args.push('-v', normalized)
+    } else {
+      skippedBinds.push(bind)
+    }
+  })
 
   const portBindings = inspect.HostConfig?.PortBindings ?? {}
   Object.entries(portBindings).forEach(([containerPort, bindings]) => {
@@ -256,7 +279,7 @@ function buildContainerRunArgs(name: string, inspect: ContainerInspect, imageTag
     args.push(...inspect.Config.Cmd)
   }
 
-  return args
+  return { args, skippedBinds }
 }
 
 function createStep(label: string, command?: string, runOn?: 'source' | 'target' | 'local'): MigrationPlanStep {
@@ -529,7 +552,13 @@ export async function runMigration(
 
       reportProgress(`Creating container ${container} on target`)
       logs.push(`Creating container ${container} on target`)
-      const runArgs = buildContainerRunArgs(container, inspect, imageTag)
+      const { args: runArgs, skippedBinds } = buildContainerRunArgs(container, inspect, imageTag)
+      if (skippedBinds.length > 0) {
+        logs.push(
+          `Skipped ${skippedBinds.length} bind mount(s) with Windows paths for ${container}. Update mounts manually on the target.`,
+        )
+        logs.push(`Skipped mounts: ${skippedBinds.join(', ')}`)
+      }
       await runDockerOnTarget(target, runArgs)
 
       try {
