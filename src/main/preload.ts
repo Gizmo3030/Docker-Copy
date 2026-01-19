@@ -21,6 +21,14 @@ const api: DockerCopyApi = {
     selection: MigrationSelection,
     options: MigrationOptions,
   ) => ipcRenderer.invoke('migration:run', source, target, selection, options),
+  onMigrationProgress: (handler) => {
+    const listener = (_event: Electron.IpcRendererEvent, update: { current: number; total: number; message: string }) =>
+      handler(update)
+    ipcRenderer.on('migration:progress', listener)
+    return () => {
+      ipcRenderer.removeListener('migration:progress', listener)
+    }
+  },
 }
 
 const meta = {

@@ -83,4 +83,7 @@ export interface DockerCopyApi {
     selection: MigrationSelection,
     options: MigrationOptions,
   ) => Promise<MigrationResult>
+  onMigrationProgress: (
+    handler: (update: { current: number; total: number; message: string }) => void,
+  ) => () => void
 }

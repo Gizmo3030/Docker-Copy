@@ -74,6 +74,6 @@ ipcMain.handle(
 
 ipcMain.handle(
   'migration:run',
-  async (_event, source: HostConfig, target: HostConfig, selection: MigrationSelection, options: MigrationOptions) =>
-    runMigration(source, target, selection, options),
+  async (event, source: HostConfig, target: HostConfig, selection: MigrationSelection, options: MigrationOptions) =>
+    runMigration(event, source, target, selection, options),
 )

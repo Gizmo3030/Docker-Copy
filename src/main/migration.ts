@@ -1,3 +1,7 @@
+import { promises as fs } from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import type { IpcMainInvokeEvent } from 'electron'
 import type {
   HostConfig,
   MigrationOptions,
@@ -13,6 +17,156 @@ const DEFAULT_NETWORKS = new Set(['bridge', 'host', 'none'])
 
 function isDefaultNetwork(name: string): boolean {
   return DEFAULT_NETWORKS.has(name)
+}
+
+type ContainerInspect = {
+  Name?: string
+  Config?: {
+    Env?: string[]
+    Cmd?: string[]
+    Entrypoint?: string[]
+    WorkingDir?: string
+    User?: string
+  }
+  HostConfig?: {
+    Binds?: string[]
+    PortBindings?: Record<string, Array<{ HostIp?: string; HostPort?: string }>>
+    RestartPolicy?: { Name?: string; MaximumRetryCount?: number }
+    AutoRemove?: boolean
+  }
+  NetworkSettings?: {
+    Networks?: Record<string, unknown>
+  }
+  State?: { Running?: boolean; Status?: string }
+}
+
+function shellEscape(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`
+}
+
+function buildSshCommandString(host: HostConfig, remoteCommand: string): string {
+  if (!host.host || !host.user) {
+    throw new Error('Remote host and user are required for SSH commands.')
+  }
+  const parts: string[] = ['ssh']
+  if (host.port) {
+    parts.push('-p', String(host.port))
+  }
+  if (host.identityFile) {
+    parts.push('-i', host.identityFile)
+  }
+  parts.push(`${host.user}@${host.host}`, '--', remoteCommand)
+  return parts.map(shellEscape).join(' ')
+}
+
+function buildDockerTarCommand(volume: string): string {
+  const volumeArg = shellEscape(`${volume}:/from`)
+  return `docker run --rm -v ${volumeArg} alpine sh -c "cd /from && tar -cpf - ."`
+}
+
+function buildDockerUntarCommand(volume: string): string {
+  const volumeArg = shellEscape(`${volume}:/to`)
+  return `docker run --rm -i -v ${volumeArg} alpine sh -c "cd /to && rm -rf ./* ./.??* && tar -xpf -"`
+}
+
+async function syncVolumeWithHelper(source: HostConfig, target: HostConfig, name: string): Promise<void> {
+  if (isRemoteHost(source)) {
+    throw new Error('Helper-container sync requires a local source host.')
+  }
+  const sourceCmd = buildDockerTarCommand(name)
+  const targetCmd = buildDockerUntarCommand(name)
+  const pipeline = isRemoteHost(target)
+    ? `${sourceCmd} | ${buildSshCommandString(target, targetCmd)}`
+    : `${sourceCmd} | ${targetCmd}`
+  await runLocalCommand('sh', ['-c', pipeline])
+}
+
+function sanitizeImageTag(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9_.-]+/g, '-')
+}
+
+function buildDockerCommand(args: string[]): string {
+  return `docker ${args.map(shellEscape).join(' ')}`
+}
+
+async function runDockerOnTarget(target: HostConfig, args: string[]): Promise<void> {
+  if (isRemoteHost(target)) {
+    await runRemoteCommand(target, buildDockerCommand(args))
+    return
+  }
+  await runLocalCommand('docker', args)
+}
+
+async function rsyncFileToTarget(filePath: string, targetPath: string, target: HostConfig): Promise<void> {
+  if (!isRemoteHost(target)) {
+    await fs.copyFile(filePath, targetPath)
+    return
+  }
+  const sshArgs = buildSshArgs(target, 'true')
+  const sshIndex = sshArgs.findIndex((arg) => arg.includes('@'))
+  const sshPrefix = ['ssh', ...sshArgs.slice(0, sshIndex)]
+  const remoteHost = sshArgs[sshIndex]
+  const args = ['-az', '-e', `${sshPrefix.join(' ')}`, filePath, `${remoteHost}:${targetPath}`]
+  await runLocalCommand('rsync', args)
+}
+
+function buildContainerRunArgs(name: string, inspect: ContainerInspect, imageTag: string): string[] {
+  const args: string[] = []
+  const isRunning = Boolean(inspect.State?.Running)
+  args.push(isRunning ? 'run' : 'create')
+  if (isRunning) {
+    args.push('-d')
+  }
+  args.push('--name', name)
+
+  const env = inspect.Config?.Env ?? []
+  env.forEach((entry) => args.push('-e', entry))
+
+  const binds = inspect.HostConfig?.Binds ?? []
+  binds.forEach((bind) => args.push('-v', bind))
+
+  const portBindings = inspect.HostConfig?.PortBindings ?? {}
+  Object.entries(portBindings).forEach(([containerPort, bindings]) => {
+    if (!bindings?.length) {
+      return
+    }
+    bindings.forEach((binding) => {
+      const hostIp = binding.HostIp && binding.HostIp !== '' ? `${binding.HostIp}:` : ''
+      const hostPort = binding.HostPort ? `${binding.HostPort}:` : ''
+      args.push('-p', `${hostIp}${hostPort}${containerPort}`)
+    })
+  })
+
+  const restart = inspect.HostConfig?.RestartPolicy
+  if (restart?.Name && restart.Name !== 'no') {
+    const policy = restart.Name === 'on-failure' && restart.MaximumRetryCount
+      ? `on-failure:${restart.MaximumRetryCount}`
+      : restart.Name
+    args.push(`--restart=${policy}`)
+  }
+
+  const networkNames = Object.keys(inspect.NetworkSettings?.Networks ?? {})
+  const nonDefaultNetwork = networkNames.find((network) => !isDefaultNetwork(network))
+  if (nonDefaultNetwork) {
+    args.push('--network', nonDefaultNetwork)
+  }
+
+  if (inspect.Config?.WorkingDir) {
+    args.push('-w', inspect.Config.WorkingDir)
+  }
+  if (inspect.Config?.User) {
+    args.push('-u', inspect.Config.User)
+  }
+  if (inspect.Config?.Entrypoint?.length) {
+    args.push('--entrypoint', inspect.Config.Entrypoint.join(' '))
+  }
+
+  args.push(imageTag)
+  if (inspect.Config?.Cmd?.length) {
+    args.push(...inspect.Config.Cmd)
+  }
+
+  return args
 }
 
 function createStep(label: string, command?: string, runOn?: 'source' | 'target' | 'local'): MigrationPlanStep {
@@ -48,14 +202,15 @@ export async function createMigrationPlan(
   }
 
   if (options.includeVolumes && selection.volumes.length) {
+    warnings.push('Volume sync uses a helper container (alpine) and does not require sudo.')
     for (const volume of selection.volumes) {
       steps.push(
         createStep(`Ensure volume ${volume} exists on target`, `docker volume create ${volume}`, 'target'),
       )
       steps.push(
         createStep(
-          `Sync volume ${volume} data to target`,
-          `rsync -az --delete <sourceMountpoint>/ <targetMountpoint>/`,
+          `Sync volume ${volume} data to target (helper container)`,
+          `docker run --rm -v ${volume}:/from alpine sh -c "tar -cpf - -C /from ." | ssh <target> docker run --rm -i -v ${volume}:/to alpine sh -c "tar -xpf - -C /to"`,
           'local',
         ),
       )
@@ -63,7 +218,7 @@ export async function createMigrationPlan(
   }
 
   if (options.includeContainers && selection.containers.length) {
-    warnings.push('Container runtime configuration recreation is not yet automated.')
+    warnings.push('Containers are recreated with a best-effort config. Review runtime settings after migration.')
     for (const container of selection.containers) {
       steps.push(
         createStep(
@@ -133,7 +288,23 @@ async function ensureNetworkOnTarget(target: HostConfig, name: string): Promise<
   }
 }
 
-async function rsyncDirectory(sourcePath: string, targetPath: string, target: HostConfig): Promise<void> {
+function isPermissionDenied(error: unknown): boolean {
+  if (error instanceof Error && /permission denied/i.test(error.message)) {
+    return true
+  }
+  const stderr = (error as { stderr?: string }).stderr
+  return typeof stderr === 'string' && /permission denied/i.test(stderr)
+}
+
+async function rsyncDirectory(
+  sourcePath: string,
+  targetPath: string,
+  target: HostConfig,
+  forceSudo = false,
+): Promise<void> {
+  const needsSudoSource = forceSudo || sourcePath.startsWith('/var/lib/docker/volumes')
+  const needsSudoTarget = forceSudo || targetPath.startsWith('/var/lib/docker/volumes')
+
   if (isRemoteHost(target)) {
     const sshArgs = buildSshArgs(target, 'true')
     const sshIndex = sshArgs.findIndex((arg) => arg.includes('@'))
@@ -145,17 +316,28 @@ async function rsyncDirectory(sourcePath: string, targetPath: string, target: Ho
       '--delete',
       '-e',
       `${sshPrefix.join(' ')}`,
+      ...(needsSudoTarget ? ['--rsync-path', 'sudo -n rsync'] : []),
       `${sourcePath}/`,
       `${remoteHost}:${targetPath}/`,
     ]
+    if (needsSudoSource) {
+      await runLocalCommand('sudo', ['-n', 'rsync', ...args])
+      return
+    }
     await runLocalCommand('rsync', args)
     return
   }
 
-  await runLocalCommand('rsync', ['-az', '--delete', `${sourcePath}/`, `${targetPath}/`])
+  const localArgs = ['-az', '--delete', `${sourcePath}/`, `${targetPath}/`]
+  if (needsSudoSource || needsSudoTarget) {
+    await runLocalCommand('sudo', ['-n', 'rsync', ...localArgs])
+    return
+  }
+  await runLocalCommand('rsync', localArgs)
 }
 
 export async function runMigration(
+  event: IpcMainInvokeEvent,
   source: HostConfig,
   target: HostConfig,
   selection: MigrationSelection,
@@ -163,12 +345,30 @@ export async function runMigration(
 ): Promise<MigrationResult> {
   const logs: string[] = []
 
+  const totalSteps =
+    (options.includeNetworks
+      ? selection.networks.filter((name) => !isDefaultNetwork(name)).length
+      : 0) +
+    (options.includeVolumes ? selection.volumes.length : 0) +
+    (options.includeContainers ? selection.containers.length * 5 : 0)
+
+  let current = 0
+  const reportProgress = (message: string) => {
+    current += 1
+    event.sender.send('migration:progress', {
+      current,
+      total: Math.max(totalSteps, 1),
+      message,
+    })
+  }
+
   if (options.includeNetworks) {
     for (const network of selection.networks) {
       if (isDefaultNetwork(network)) {
         logs.push(`Skipping default network ${network} (predefined by Docker).`)
         continue
       }
+      reportProgress(`Creating network ${network} on target`)
       logs.push(`Creating network ${network} on target`)
       await ensureNetworkOnTarget(target, network)
     }
@@ -184,20 +384,78 @@ export async function runMigration(
     }
 
     for (const volume of selection.volumes) {
+      reportProgress(`Syncing volume ${volume} to target`)
       logs.push(`Preparing volume ${volume} on target`)
       await ensureVolumeOnTarget(target, volume)
-      const sourceMount = await getVolumeMountpoint(source, volume)
-      const targetMount = await getVolumeMountpoint(target, volume)
-      logs.push(`Syncing ${sourceMount} -> ${targetMount}`)
-      await rsyncDirectory(sourceMount, targetMount, target)
+      logs.push('Syncing volume data via helper container stream.')
+      await syncVolumeWithHelper(source, target, volume)
     }
   }
 
   if (options.includeContainers) {
-    const containerInspect = await inspectContainers(source, selection.containers)
-    logs.push('Container inspection data captured.')
-    logs.push(containerInspect)
-    logs.push('Container migration execution is not automated yet. Use the plan as a guide.')
+    if (isRemoteHost(source)) {
+      return {
+        ok: false,
+        message: 'Automated container migration requires a local source host for now.',
+        logs,
+      }
+    }
+
+    const containerInspectRaw = await inspectContainers(source, selection.containers)
+    const containerInspect = JSON.parse(containerInspectRaw) as ContainerInspect[]
+    const inspectByName = new Map(
+      containerInspect
+        .map((item) => [item.Name?.replace(/^\//, ''), item] as const)
+        .filter(([name]) => Boolean(name)),
+    )
+
+    for (const container of selection.containers) {
+      reportProgress(`Committing ${container}`)
+      const inspect = inspectByName.get(container)
+      if (!inspect) {
+        logs.push(`Skipping ${container}: unable to read container configuration.`)
+        continue
+      }
+
+      const imageTag = `docker-copy/${sanitizeImageTag(container)}:migrated`
+      const tarName = `${sanitizeImageTag(container)}-${Date.now()}.tar`
+      const localTar = path.join(os.tmpdir(), tarName)
+      const targetTar = isRemoteHost(target) ? `/tmp/${tarName}` : localTar
+
+      logs.push(`Committing ${container} to ${imageTag}`)
+      await runLocalCommand('docker', ['commit', container, imageTag])
+
+      reportProgress(`Saving image ${container}`)
+      logs.push(`Saving ${imageTag} to ${localTar}`)
+      await runLocalCommand('docker', ['save', imageTag, '-o', localTar])
+
+      reportProgress(`Transferring image ${container}`)
+      logs.push(`Transferring image tar to target`)
+      await rsyncFileToTarget(localTar, targetTar, target)
+
+      reportProgress(`Loading image ${container} on target`)
+      logs.push(`Loading image ${imageTag} on target`)
+      await runDockerOnTarget(target, ['load', '-i', targetTar])
+
+      reportProgress(`Creating container ${container} on target`)
+      logs.push(`Creating container ${container} on target`)
+      const runArgs = buildContainerRunArgs(container, inspect, imageTag)
+      await runDockerOnTarget(target, runArgs)
+
+      try {
+        await fs.unlink(localTar)
+      } catch {
+        // ignore cleanup errors
+      }
+
+      if (isRemoteHost(target)) {
+        try {
+          await runRemoteCommand(target, `rm -f ${shellEscape(targetTar)}`)
+        } catch {
+          // ignore cleanup errors
+        }
+      }
+    }
   }
 
   if (options.includeVolumes) {

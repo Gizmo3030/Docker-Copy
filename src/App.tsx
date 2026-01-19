@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type {
   ConnectionTestResult,
   DockerInventory,
@@ -35,6 +35,10 @@ function App() {
   const [isBusy, setIsBusy] = useState(false)
   const [sourceTest, setSourceTest] = useState<ConnectionTestResult | null>(null)
   const [targetTest, setTargetTest] = useState<ConnectionTestResult | null>(null)
+  const [showAdvancedWarnings, setShowAdvancedWarnings] = useState(false)
+  const [progress, setProgress] = useState<{ current: number; total: number; message: string } | null>(
+    null,
+  )
 
   const getDockerApi = () => {
     if (!window.dockerCopy) {
@@ -55,6 +59,16 @@ function App() {
       meta?.platform ? `Platform: ${meta.platform}` : 'Platform: unknown',
     ]
   }
+
+  useEffect(() => {
+    if (!window.dockerCopy?.onMigrationProgress) {
+      return
+    }
+    const unsubscribe = window.dockerCopy.onMigrationProgress((update) => {
+      setProgress(update)
+    })
+    return unsubscribe
+  }, [])
 
   const isSelectionEmpty = useMemo(
     () =>
@@ -129,6 +143,7 @@ function App() {
   const handleCreatePlan = async () => {
     setIsBusy(true)
     setResult(null)
+    setProgress(null)
     try {
       const api = getDockerApi()
       if (!api) {
@@ -138,6 +153,7 @@ function App() {
       }
       const newPlan = await api.createPlan(sourceHost, targetHost, selection, options)
       setPlan(newPlan)
+      setShowAdvancedWarnings(false)
     } catch (error) {
         const diagnostics = getPreloadDiagnostics()
       setResult({
@@ -153,6 +169,7 @@ function App() {
   const handleRunMigration = async () => {
     setIsBusy(true)
     setResult(null)
+    setProgress(null)
     try {
       const api = getDockerApi()
       if (!api) {
@@ -191,6 +208,19 @@ function App() {
           <span className={isBusy ? 'pill busy' : 'pill'}>{isBusy ? 'Working…' : 'Idle'}</span>
         </div>
       </header>
+
+      {isBusy && (
+        <div className="progress" role="progressbar" aria-label="Migration progress" aria-busy="true">
+          <div
+            className="progress-bar"
+            style={{ width: progress ? `${Math.min(100, (progress.current / progress.total) * 100)}%` : '35%' }}
+          />
+          <div className="progress-meta">
+            <span>{progress ? `${progress.current}/${progress.total}` : 'Working…'}</span>
+            <span>{progress?.message ?? 'Initializing'}</span>
+          </div>
+        </div>
+      )}
 
       {!window.dockerCopy && (
         <section className="card">
@@ -498,6 +528,18 @@ function App() {
           {plan ? (
             <>
               {plan.warnings.length > 0 && (
+                <div className="inline-actions">
+                  <label className="inline">
+                    <input
+                      type="checkbox"
+                      checked={showAdvancedWarnings}
+                      onChange={(event) => setShowAdvancedWarnings(event.target.checked)}
+                    />
+                    Show advanced warnings ({plan.warnings.length})
+                  </label>
+                </div>
+              )}
+              {plan.warnings.length > 0 && showAdvancedWarnings && (
                 <ul className="warnings">
                   {plan.warnings.map((warning) => (
                     <li key={warning}>{warning}</li>
