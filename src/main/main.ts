@@ -1,4 +1,5 @@
 import { app, BrowserWindow, ipcMain } from 'electron'
+import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { HostConfig, MigrationOptions, MigrationSelection } from '../shared/types'
@@ -11,13 +12,21 @@ const __dirname = path.dirname(__filename)
 let mainWindow: BrowserWindow | null = null
 
 function createWindow(): void {
+  const preloadPath = path.join(__dirname, 'preload.js')
+  if (!existsSync(preloadPath)) {
+    console.warn(`[preload] missing at ${preloadPath}`)
+  } else {
+    console.log(`[preload] loading ${preloadPath}`)
+  }
+
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
-      contextIsolation: false,
-      nodeIntegration: true,
+      preload: preloadPath,
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
     },
   })
 

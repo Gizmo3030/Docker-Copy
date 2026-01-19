@@ -1,6 +1,19 @@
-import type { HostConfig, MigrationOptions, MigrationPlan, MigrationPlanStep, MigrationResult, MigrationSelection } from '../shared/types'
+import type {
+  HostConfig,
+  MigrationOptions,
+  MigrationPlan,
+  MigrationPlanStep,
+  MigrationResult,
+  MigrationSelection,
+} from '../shared/types'
 import { inspectContainers, inspectVolumes } from './docker.js'
 import { buildSshArgs, isRemoteHost, runLocalCommand, runRemoteCommand } from './ssh.js'
+
+const DEFAULT_NETWORKS = new Set(['bridge', 'host', 'none'])
+
+function isDefaultNetwork(name: string): boolean {
+  return DEFAULT_NETWORKS.has(name)
+}
 
 function createStep(label: string, command?: string, runOn?: 'source' | 'target' | 'local'): MigrationPlanStep {
   return {
@@ -22,6 +35,12 @@ export async function createMigrationPlan(
 
   if (options.includeNetworks && selection.networks.length) {
     for (const network of selection.networks) {
+      if (isDefaultNetwork(network)) {
+        warnings.push(
+          `Skipping default network "${network}". Predefined Docker networks are not created manually.`,
+        )
+        continue
+      }
       steps.push(
         createStep(`Create network ${network} on target`, `docker network create ${network}`, 'target'),
       )
@@ -146,6 +165,10 @@ export async function runMigration(
 
   if (options.includeNetworks) {
     for (const network of selection.networks) {
+      if (isDefaultNetwork(network)) {
+        logs.push(`Skipping default network ${network} (predefined by Docker).`)
+        continue
+      }
       logs.push(`Creating network ${network} on target`)
       await ensureNetworkOnTarget(target, network)
     }

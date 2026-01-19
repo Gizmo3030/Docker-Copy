@@ -37,35 +37,23 @@ function App() {
   const [targetTest, setTargetTest] = useState<ConnectionTestResult | null>(null)
 
   const getDockerApi = () => {
-    if (window.dockerCopy) {
-      return window.dockerCopy
-    }
-
-    const unsafeWindow = window as Window & {
-      require?: (module: string) => { ipcRenderer?: { invoke: (...args: unknown[]) => Promise<unknown> } }
-    }
-    const electron = unsafeWindow.require?.('electron')
-    const ipcRenderer = electron?.ipcRenderer
-    if (!ipcRenderer) {
+    if (!window.dockerCopy) {
       return null
     }
+    return window.dockerCopy
+  }
 
-    return {
-      listInventory: (host: HostConfig) => ipcRenderer.invoke('inventory:list', host),
-      testConnection: (host: HostConfig) => ipcRenderer.invoke('connection:test', host),
-      createPlan: (
-        source: HostConfig,
-        target: HostConfig,
-        selection: MigrationSelection,
-        options: MigrationOptions,
-      ) => ipcRenderer.invoke('migration:plan', source, target, selection, options),
-      runMigration: (
-        source: HostConfig,
-        target: HostConfig,
-        selection: MigrationSelection,
-        options: MigrationOptions,
-      ) => ipcRenderer.invoke('migration:run', source, target, selection, options),
-    }
+  const getPreloadDiagnostics = () => {
+    const isElectron = typeof navigator !== 'undefined' && /Electron/.test(navigator.userAgent)
+    const meta = window.dockerCopyMeta
+    return [
+      `Renderer: ${isElectron ? 'electron' : 'browser'}`,
+      `Location: ${window.location.href}`,
+      `User agent: ${navigator.userAgent}`,
+      `Preload meta: ${meta?.preloadLoaded ? 'loaded' : 'missing'}`,
+      meta?.versions?.electron ? `Electron: ${meta.versions.electron}` : 'Electron: unknown',
+      meta?.platform ? `Platform: ${meta.platform}` : 'Platform: unknown',
+    ]
   }
 
   const isSelectionEmpty = useMemo(
@@ -94,15 +82,18 @@ function App() {
     try {
       const api = getDockerApi()
       if (!api) {
-        throw new Error('Electron preload API is unavailable. Launch the Electron app to access Docker.')
+        throw new Error(
+          'Electron preload API is unavailable. Restart the Electron app and ensure the preload script is loading.',
+        )
       }
       const testResult = await api.testConnection(host)
       setTest(testResult)
     } catch (error) {
+      const diagnostics = getPreloadDiagnostics()
       setTest({
         ok: false,
         message: 'Connection test failed to start.',
-        logs: [error instanceof Error ? error.message : 'Unknown error'],
+        logs: [error instanceof Error ? error.message : 'Unknown error', ...diagnostics],
       })
     } finally {
       setIsBusy(false)
@@ -116,16 +107,19 @@ function App() {
     try {
       const api = getDockerApi()
       if (!api) {
-        throw new Error('Electron preload API is unavailable. Launch the Electron app to access Docker.')
+        throw new Error(
+          'Electron preload API is unavailable. Restart the Electron app and ensure the preload script is loading.',
+        )
       }
       const data = await api.listInventory(sourceHost)
       setInventory(data)
       setSelection({ containers: [], volumes: [], networks: [] })
     } catch (error) {
+      const diagnostics = getPreloadDiagnostics()
       setResult({
         ok: false,
         message: 'Failed to load inventory.',
-        logs: [error instanceof Error ? error.message : 'Unknown error'],
+        logs: [error instanceof Error ? error.message : 'Unknown error', ...diagnostics],
       })
     } finally {
       setIsBusy(false)
@@ -138,15 +132,18 @@ function App() {
     try {
       const api = getDockerApi()
       if (!api) {
-        throw new Error('Electron preload API is unavailable. Launch the Electron app to access Docker.')
+        throw new Error(
+          'Electron preload API is unavailable. Restart the Electron app and ensure the preload script is loading.',
+        )
       }
       const newPlan = await api.createPlan(sourceHost, targetHost, selection, options)
       setPlan(newPlan)
     } catch (error) {
+        const diagnostics = getPreloadDiagnostics()
       setResult({
         ok: false,
         message: 'Failed to generate migration plan.',
-        logs: [error instanceof Error ? error.message : 'Unknown error'],
+          logs: [error instanceof Error ? error.message : 'Unknown error', ...diagnostics],
       })
     } finally {
       setIsBusy(false)
@@ -159,7 +156,9 @@ function App() {
     try {
       const api = getDockerApi()
       if (!api) {
-        throw new Error('Electron preload API is unavailable. Launch the Electron app to access Docker.')
+        throw new Error(
+          'Electron preload API is unavailable. Restart the Electron app and ensure the preload script is loading.',
+        )
       }
       const migrationResult = await api.runMigration(
         sourceHost,
@@ -169,10 +168,11 @@ function App() {
       )
       setResult(migrationResult)
     } catch (error) {
+      const diagnostics = getPreloadDiagnostics()
       setResult({
         ok: false,
         message: 'Migration failed to start.',
-        logs: [error instanceof Error ? error.message : 'Unknown error'],
+        logs: [error instanceof Error ? error.message : 'Unknown error', ...diagnostics],
       })
     } finally {
       setIsBusy(false)
@@ -191,6 +191,17 @@ function App() {
           <span className={isBusy ? 'pill busy' : 'pill'}>{isBusy ? 'Working…' : 'Idle'}</span>
         </div>
       </header>
+
+      {!window.dockerCopy && (
+        <section className="card">
+          <h2>Preload not detected</h2>
+          <p className="hint">
+            The renderer cannot access the Electron preload API. Make sure you started the
+            Electron app (not just the Vite dev server) and restart after changes.
+          </p>
+          <pre>{getPreloadDiagnostics().join('\n')}</pre>
+        </section>
+      )}
 
       <section className="grid">
         <div className="card">

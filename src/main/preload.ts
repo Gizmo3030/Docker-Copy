@@ -23,4 +23,16 @@ const api: DockerCopyApi = {
   ) => ipcRenderer.invoke('migration:run', source, target, selection, options),
 }
 
-contextBridge.exposeInMainWorld('dockerCopy', api)
+const meta = {
+  preloadLoaded: true,
+  versions: process.versions,
+  platform: process.platform,
+}
+
+if (process.contextIsolated) {
+  contextBridge.exposeInMainWorld('dockerCopy', api)
+  contextBridge.exposeInMainWorld('dockerCopyMeta', meta)
+} else {
+  ;(window as Window & { dockerCopy?: DockerCopyApi }).dockerCopy = api
+  ;(window as Window & { dockerCopyMeta?: typeof meta }).dockerCopyMeta = meta
+}

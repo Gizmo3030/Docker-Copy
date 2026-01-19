@@ -65,11 +65,40 @@ npm run dev
 
 Use SSH keys to authenticate to remote Docker hosts without passwords.
 
-1. Generate a key pair on the machine running Docker Copy. Use the modern ED25519 algorithm and protect it with a passphrase.
-2. Copy the public key to the target host user you will connect as. The public key must be added to that user’s `~/.ssh/authorized_keys` file.
-3. Ensure permissions are locked down on the target host: `~/.ssh` should be `700` and `authorized_keys` should be `600`.
-4. Test the connection to confirm the host key is trusted and the key is accepted.
-5. (Optional) Create an SSH config entry with the host alias, user, and identity file to simplify connections.
+1. Open a terminal on the machine running Docker Copy.
+2. Generate a new ED25519 key pair:
+
+	```bash
+	ssh-keygen -t ed25519 -C "docker-copy" -f ~/.ssh/id_ed25519
+	```
+
+	- When prompted, set a strong passphrase.
+3. Start the SSH agent and add the key:
+
+	```bash
+	eval "$(ssh-agent -s)"
+	ssh-add ~/.ssh/id_ed25519
+	```
+
+4. Copy the public key to the target host user you will connect as:
+
+	```bash
+	ssh-copy-id -i ~/.ssh/id_ed25519.pub user@target-host
+	```
+
+	If `ssh-copy-id` is not available, append the key manually:
+
+	```bash
+	cat ~/.ssh/id_ed25519.pub | ssh user@target-host "mkdir -p ~/.ssh && chmod 700 ~/.ssh && cat >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"
+	```
+
+5. Test the connection to confirm the host key is trusted and the key is accepted:
+
+	```bash
+	ssh user@target-host
+	```
+
+6. (Optional) Create an SSH config entry with the host alias, user, and identity file to simplify connections.
 
 > Tip: For least-privilege access, create a dedicated migration user on the target host and grant only the required Docker permissions.
 
