@@ -65,6 +65,40 @@ npm run dev
 
 Use SSH keys to authenticate to remote Docker hosts without passwords.
 
+### Windows quick setup (PowerShell)
+
+1. Open PowerShell as your user (not admin). Confirm `ssh-keygen` exists (`Get-Command ssh-keygen`).
+2. Generate a new ED25519 key pair in your user profile:
+
+	```powershell
+	ssh-keygen -t ed25519 -C "docker-copy" -f $env:USERPROFILE\.ssh\id_ed25519
+	```
+
+	- When prompted, set a strong passphrase.
+3. Start the built-in SSH agent, set it to start automatically, and add the key:
+
+	```powershell
+	Get-Service ssh-agent | Set-Service -StartupType Automatic
+	Start-Service ssh-agent
+	ssh-add $env:USERPROFILE\.ssh\id_ed25519
+	```
+
+4. Copy the public key to the target host (replace `user@target-host`). Windows does not ship `ssh-copy-id`, so append the key manually:
+
+	```powershell
+	Get-Content $env:USERPROFILE\.ssh\id_ed25519.pub | ssh user@target-host "mkdir -p ~/.ssh && chmod 700 ~/.ssh && cat >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"
+	```
+
+5. Test the connection to verify the key works and the host key is trusted:
+
+	```powershell
+	ssh user@target-host
+	```
+
+6. (Optional) Add an SSH config entry at `$env:USERPROFILE\.ssh\config` to set the host alias, user, and identity file.
+
+### Cross-platform steps
+
 1. Open a terminal on the machine running Docker Copy.
 2. Generate a new ED25519 key pair:
 
